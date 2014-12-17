@@ -1,0 +1,490 @@
+
+<!doctype><html><head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Odyssey.js Slides</title>
+  <meta name="description" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="icon" type="image/x-icon" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+  <link rel="icon" type="image/png" href="http://cartodb.github.io/odyssey.js/sandbox/favicon.png">
+
+  <link rel="stylesheet" href="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/themes/css/cartodb.css">
+  <link rel="stylesheet" href="http://cartodb.github.io/odyssey.js/sandbox/css/slides.css">
+  <script src="http://cartodb.github.io/odyssey.js/vendor/modernizr-2.6.2.min.js"></script>
+</head>
+<body>
+  <div id="map" style="width: 100%; height: 100%;"></div>
+
+  <div id="slides_container" style="display:block;">
+    <div id="dots"></div>
+
+    <div id="slides"></div>
+
+    <ul id="navButtons">
+      <li><a class="prev"></a></li>
+      <li><a class="next"></a></li>
+    </ul>
+  </div>
+
+  <div id="credits">
+    <span class="title" id="title">Title</span>
+    <span class="author"><strong id="author">By Name using</strong> <a href="http://cartodb.github.io/odyssey.js/">Odyssey.js</a><span>
+  </span></span></div>
+
+  <script src="http://cartodb-libs.global.ssl.fastly.net/cartodb.js/v3/cartodb.js"></script>
+  <script src="http://cartodb.github.io/odyssey.js/dist/odyssey.js" charset="UTF-8"></script>
+
+  <script>
+    var resizePID;
+
+    function clearResize() {
+      clearTimeout(resizePID);
+      resizePID = setTimeout(function() { adjustSlides(); }, 100);
+    }
+
+    if (!window.addEventListener) {
+      window.attachEvent("resize", function load(event) {
+        clearResize();
+      });
+    } else {
+      window.addEventListener("resize", function load(event) {
+        clearResize();
+      });
+    }
+
+    function adjustSlides() {
+      var container = document.getElementById("slides_container"),
+          slide = document.querySelectorAll('.selected_slide')[0];
+
+      if (slide) {
+        if (slide.offsetHeight+169+40+80 >= window.innerHeight) {
+          container.style.bottom = "80px";
+
+          var h = container.offsetHeight;
+
+          slide.style.height = h-169+"px";
+          slide.classList.add("scrolled");
+        } else {
+          container.style.bottom = "auto";
+          container.style.minHeight = "0";
+
+          slide.style.height = "auto";
+          slide.classList.remove("scrolled");
+        }
+      }
+    }
+
+    var resizeAction = O.Action(function() {
+      function imageLoaded() {
+        counter--;
+
+        if (counter === 0) {
+          adjustSlides();
+        }
+      }
+      var images = $('img');
+      var counter = images.length;
+
+      images.each(function() {
+        if (this.complete) {
+          imageLoaded.call( this );
+        } else {
+          $(this).one('load', imageLoaded);
+        }
+      });
+    });
+
+    function click(el) {
+      var element = O.Core.getElement(el);
+      var t = O.Trigger();
+
+      // TODO: clean properly
+      function click() {
+        t.trigger();
+      }
+
+      if (element) element.onclick = click;
+
+      return t;
+    }
+
+    O.Template({
+      init: function() {
+        var seq = O.Triggers.Sequential();
+
+        var baseurl = this.baseurl = 'http://{s}.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+        var map = this.map = L.map('map').setView([0, 0.0], 4);
+        var basemap = this.basemap = L.tileLayer(baseurl, {
+          attribution: 'data OSM - map CartoDB'
+        }).addTo(map);
+
+        // enanle keys to move
+        O.Keys().on('map').left().then(seq.prev, seq)
+        O.Keys().on('map').right().then(seq.next, seq)
+
+        click(document.querySelectorAll('.next')).then(seq.next, seq)
+        click(document.querySelectorAll('.prev')).then(seq.prev, seq)
+
+        var slides = O.Actions.Slides('slides');
+        var story = O.Story()
+
+        this.story = story;
+        this.seq = seq;
+        this.slides = slides;
+        this.progress = O.UI.DotProgress('dots').count(0);
+      },
+
+      update: function(actions) {
+        var self = this;
+
+        if (!actions.length) return;
+
+        this.story.clear();
+
+        if (this.baseurl && (this.baseurl !== actions.global.baseurl)) {
+          this.baseurl = actions.global.baseurl || 'http://0.api.cartocdn.com/base-light/{z}/{x}/{y}.png';
+
+          this.basemap.setUrl(this.baseurl);
+        }
+
+        if (this.cartoDBLayer && ("http://"+self.cartoDBLayer.options.user_name+".cartodb.com/api/v2/viz/"+self.cartoDBLayer.options.layer_definition.stat_tag+"/viz.json" !== actions.global.vizjson)) {
+          this.map.removeLayer(this.cartoDBLayer);
+
+          this.cartoDBLayer = null;
+          this.created = false;
+        }
+
+        if (actions.global.vizjson && !this.cartoDBLayer) {
+          if (!this.created) { // sendCode debounce < vis loader
+            cdb.vis.Loader.get(actions.global.vizjson, function(vizjson) {
+              self.map.fitBounds(vizjson.bounds);
+
+              cartodb.createLayer(self.map, vizjson)
+                .done(function(layer) {
+                  self.cartoDBLayer = layer;
+
+                  var sublayer = layer.getSubLayer(0),
+                      layer_name = layer.layers[0].options.layer_name,
+                      filter = actions.global.cartodb_filter ? " WHERE "+actions.global.cartodb_filter : "";
+
+                  sublayer.setSQL("SELECT * FROM "+layer_name+filter)
+
+                  self.map.addLayer(layer);
+
+                  self._resetActions(actions);
+                }).on('error', function(err) {
+                  console.log("some error occurred: " + err);
+                });
+            });
+
+            this.created = true;
+          }
+
+          return;
+        }
+
+        this._resetActions(actions);
+      },
+
+      _resetActions: function(actions) {
+        // update footer title and author
+        var title_ = actions.global.title === undefined ? '' : actions.global.title,
+            author_ = actions.global.author === undefined ? 'Using' : 'By '+actions.global.author+' using';
+
+        document.getElementById('title').innerHTML = title_;
+        document.getElementById('author').innerHTML = author_;
+        document.title = title_ + " | " + author_ +' Odyssey.js';
+
+        var sl = actions;
+
+        document.getElementById('slides').innerHTML = ''
+        this.progress.count(sl.length);
+
+        // create new story
+        for(var i = 0; i < sl.length; ++i) {
+          var slide = sl[i];
+          var tmpl = "<div class='slide' style='diplay:none'>";
+
+          tmpl += slide.html();
+          tmpl += "</div>";
+          document.getElementById('slides').innerHTML += tmpl;
+
+          this.progress.step(i).then(this.seq.step(i), this.seq)
+
+          var actions = O.Parallel(
+            this.slides.activate(i),
+            slide(this),
+            this.progress.activate(i),
+            resizeAction
+          );
+
+          actions.on("finish.app", function() {
+            adjustSlides();
+          });
+
+          this.story.addState(
+            this.seq.step(i),
+            actions
+          )
+        }
+
+        this.story.go(this.seq.current());
+      },
+
+      changeSlide: function(n) {
+        this.seq.current(n);
+      }
+    });
+  </script>
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+    m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+    })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+
+    ga('create', 'UA-20934186-21', 'cartodb.github.io');
+    ga('send', 'pageview');
+  </script>
+
+  <script type="text/javascript" src="http://fast.fonts.net/jsapi/3af16084-ba56-49ca-b37d-0b49b59e1927.js"></script>
+
+<script id="md_template" type="text/template">```
+-baseurl: "https://cartocdn_a.global.ssl.fastly.net/base-light/{z}/{x}/{y}.png"
+-title: "Drone Near Misses in California"
+-author: "Scott Pham / NBC Bay Area"
+```
+
+//paste here down
+#Los Angeles
+```
+- zoom: 8
+L.marker([34.0522342, -118.2436849]).actions.addRemove(S.map)
+- center: [34.0522342, -119.2436849]
+```
+**5/29/14:**
+Two aircrafts spot a "trash can sized UAV or R/C aircraft" at 6,500 feet while approaching LAX airport
+ 
+#Stockton
+```
+- zoom: 8
+L.marker([37.9577016, -121.2907796]).actions.addRemove(S.map)
+- center: [37.9577016, -122.2907796]
+```
+**6/27/14:**
+A helicopter nearly hits two "remote control gliders" at 750 feet. Pilot says they look to be about 5 or 6 feet in size. 
+ 
+#Los Angeles
+```
+- zoom: 8
+L.marker([34.0522342, -118.2436849]).actions.addRemove(S.map)
+- center: [34.0522342, -119.2436849]
+```
+**7/19/14:**
+A pilot reports a chevron shaped "UAS" over the colliseum at 3,500 feet.
+ 
+#Sausalito
+```
+- zoom: 8
+L.marker([37.8590937, -122.4852507]).actions.addRemove(S.map)
+- center: [37.8590937, -123.4852507]
+```
+**7/20/14:**
+A cessna heading for a runway in Hayward reports a close call with a small "UAS rotorcraft" with a green flashing light at 4,500 feet.
+ 
+#Sacramento
+```
+- zoom: 8
+L.marker([38.5815719, -121.4943996]).actions.addRemove(S.map)
+- center: [38.5815719, -122.4943996]
+```
+**7/29/14:**
+A national guard helicopter reports seeing a "UAV" just 30 feet away while at 1300ft over Sunrise Blvd just north of US Highway 50. The UAV was described as a "rotary" type.
+ 
+#Sacramento
+```
+- zoom: 8
+L.marker([38.5815719, -121.4943996]).actions.addRemove(S.map)
+- center: [38.5815719, -122.4943996]
+```
+**7/29/14:**
+Army pilot reports that a "UAS" passes within 30 feet of his aircraft.
+ 
+#Los Angeles
+```
+- zoom: 8
+L.marker([34.0522342, -118.2436849]).actions.addRemove(S.map)
+- center: [34.0522342, -119.2436849]
+```
+**8/4/14:**
+Pilot reports a white "drone" operating near LAX at 4000 feet. Did not impact the flight.
+ 
+#Byron
+```
+- zoom: 8
+L.marker([37.8671476, -121.6380069]).actions.addRemove(S.map)
+- center: [37.8671476, -122.6380069]
+```
+**8/11/14:**
+A cessna pilot observes an unidentified "UAS" at 3,000 feet. Did not have ot take evasive action.
+ 
+#Carlsbad
+```
+- zoom: 8
+L.marker([33.1580933, -117.3505939]).actions.addRemove(S.map)
+- center: [33.1580933, -118.3505939]
+```
+**8/16/14:**
+A cessna pilot reports multiple "RC aircraft" 1.5 miles away from a runway.
+ 
+#Van Nuys
+```
+- zoom: 8
+L.marker([34.1898566, -118.451357]).actions.addRemove(S.map)
+- center: [34.1898566, -119.451357]
+```
+**8/20/14:**
+While departing, a pilot reports a UAS at 8,700 feet.
+ 
+#Burbank
+```
+- zoom: 8
+L.marker([34.1808392, -118.3089661]).actions.addRemove(S.map)
+- center: [34.1808392, -119.3089661]
+```
+**8/23/14:**
+A pilot reports a "UAS" that is black and red and 3x3feet in size at 8,000 feet.
+ 
+#Santa Rosa
+```
+- zoom: 8
+L.marker([38.440429, -122.7140548]).actions.addRemove(S.map)
+- center: [38.440429, -123.7140548]
+```
+**8/30/14:**
+Pilot reports a "model aircraft" off the left wing while at 1,300 feet.
+ 
+#Torrance
+```
+- zoom: 8
+L.marker([33.8358492, -118.3406288]).actions.addRemove(S.map)
+- center: [33.8358492, -119.3406288]
+```
+**8/31/14:**
+Pilot observes a "UAS" at 2,400 feet. Device as described a "rotorcraft" approximately 1 foot across
+ 
+#Los Angeles
+```
+- zoom: 8
+L.marker([34.0522342, -118.2436849]).actions.addRemove(S.map)
+- center: [34.0522342, -119.2436849]
+```
+**9/3/14:**
+A cessna pilot feet reports a "slow moving silver box shaped UAS" at 7,800 feet.
+ 
+#Santa Monica
+```
+- zoom: 8
+L.marker([34.0194543, -118.4911912]).actions.addRemove(S.map)
+- center: [34.0194543, -119.4911912]
+```
+**9/4/14:**
+An Air China pilot reports a "UAS" at 4,000 feet.
+ 
+#Quincy
+```
+- zoom: 8
+L.marker([39.9368363, -120.9471764]).actions.addRemove(S.map)
+- center: [39.9368363, -121.9471764]
+```
+**9/14/14:**
+Several people report seeing a "UAS" at about 4,500 feet near Quincy. The device is descriped as "self propelled, back, and inflatible."
+ 
+#Laverne
+```
+- zoom: 8
+L.marker([34.1008426, -117.7678355]).actions.addRemove(S.map)
+- center: [34.1008426, -118.7678355]
+```
+**9/19/14:**
+Air traffic control tower reports a "small 4 rotor UAS with camera attached" at about 75 feet in altitude. Operations at the tower are not affected. The craft was reportedly used to survey a building by Newmark Grub Company.
+ 
+#Visalia
+```
+- zoom: 8
+L.marker([36.3302284, -119.2920585]).actions.addRemove(S.map)
+- center: [36.3302284, -120.2920585]
+```
+**9/20/14:**
+A cessna pilot on "photo mission work" spots 5 "UAS" aircraft. Pilots describes the UAS as "glider" types
+ 
+#San Jose
+```
+- zoom: 8
+L.marker([37.3335957, -121.8907038]).actions.addRemove(S.map)
+- center: [37.3335957, -122.8907038]
+```
+**9/24/14:**
+A cessna pilots reports seeing a "UAS" over the Calaveras Reservoir at 3,700 feet. Does not report a conflict or describe proximity to the aircraft.
+ 
+#El Cajon
+```
+- zoom: 8
+L.marker([32.7947731, -116.9625269]).actions.addRemove(S.map)
+- center: [32.7947731, -117.9625269]
+```
+**9/26/14:**
+A citizen caller reports a "drone" in El Cajon operating at about 700 feet.
+ 
+#Ontario
+```
+- zoom: 8
+L.marker([34.0633443, -117.6508876]).actions.addRemove(S.map)
+- center: [34.0633443, -118.6508876]
+```
+**10/2/14:**
+A private citizen complains that a neighbor was flying at "UAS" over his home and neighboring homes at about 100 feet the previous evening.
+ 
+#San Jose
+```
+- zoom: 8
+L.marker([37.3335957, -121.8907038]).actions.addRemove(S.map)
+- center: [37.3335957, -122.8907038]
+```
+**10/7/14:**
+Air traffic control reports that a "UAS" flies over a runway at 600-700 feet. No conflicts are reported.
+ 
+#Fresno
+```
+- zoom: 8
+L.marker([36.7468422, -119.7725868]).actions.addRemove(S.map)
+- center: [36.7468422, -120.7725868]
+```
+**10/12/14:**
+Highway patrol helicopter reports a "UAS with lights" at 1,000 feet. No evasive action is taken
+ 
+#Fresno
+```
+- zoom: 8
+L.marker([36.7468422, -119.7725868]).actions.addRemove(S.map)
+- center: [36.7468422, -120.7725868]
+```
+**10/18/14:**
+A helicopter is advised by ground observers that a "UAS" was operating in the vicinity of the Fresno Fair Grounds at approximately 150-200 feet.
+ 
+#Van Nuys
+```
+- zoom: 8
+L.marker([34.1898566, -118.451357]).actions.addRemove(S.map)
+- center: [34.1898566, -119.451357]
+```
+**11/4/14:**
+A helicopter reports seeng a "camera equipped UAS" flying near the Hollywood sign between 1,800 and 1,900 feet.
+ 
+
+
+
+
+
+</script></body></html>
